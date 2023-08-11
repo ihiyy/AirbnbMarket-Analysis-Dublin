@@ -137,10 +137,126 @@ find_origin = searches.groupby("origin_country").agg({'origin_country' : 'count'
 find_origin.columns = ['count']
 
 find_origin = find_origin.sort_values('count', ascending = False) 
-largest_origin = find_origin.nlargest(15, 'count')
-
+find_origin.nlargest(15, 'count')
 print(find_origin)
 
 
 
+#Datatypes of contacts dataset
+contacts.dtypes
 
+#Manipulation of contacts dataset
+
+#Convert date columns to datetime data type 
+contacts['ts_contact_at'] = pd.to_datetime(contacts['ts_contact_at'])
+contacts['ts_reply_at'] = pd.to_datetime(contacts['ts_reply_at'])
+contacts['ts_accepted_at'] = pd.to_datetime(contacts['ts_accepted_at'])
+contacts['ts_booking_at'] = pd.to_datetime(contacts['ts_booking_at'])
+contacts['ds_checkin'] = pd.to_datetime(contacts['ds_checkin'])
+contacts['ds_checkout'] = pd.to_datetime(contacts['ds_checkout'])
+contacts['accepted'] = np.where(np.isnan(contacts['ts_accepted_at']), False, True)
+
+contacts['stay_length'] = contacts['ds_checkout'] - contacts['ds_checkin']
+
+#Understand dataset with describe function
+display(contacts.describe())
+
+#Calculate skewness in contacts dataset
+display(contacts.skew(axis = 0, numeric_only = True, skipna = True))
+
+from scipy.stats import boxcox
+
+# Apply Box-Cox transformation to skewed columns
+skewed_columns = ['n_guests', 'n_messages']
+for col in skewed_columns:
+    contacts[col], _ = boxcox(contacts[col] + 1)  # Adding 1 to handle zero values
+
+# Now you can check the skewness again to see if it has improved
+new_skewness = contacts.skew(axis=0, numeric_only=True, skipna=True)
+display(new_skewness)
+
+# The direction of skewness is given by the sign.
+# The coefficient compares the sample distribution with a normal distribution. The larger the value, the larger the distribution differs from a normal distribution.
+# A value of zero means no skewness at all.
+# A large negative value means the distribution is negatively skewed.
+# A large positive value means the distribution is positively skewed.
+
+
+#Number of guests stayed, I choose 8 because less than 2%(1.46%) of the contacts dataset has 8 or more guests
+contacts_less8 = contacts[contacts['n_guests'] < 8]
+sns.displot(contacts_less8, x = 'n_guests', hue = 'accepted', multiple="dodge", binwidth=0.3)
+plt.show()
+
+#Conversion rate from accepting to booking
+contacts['ts_booking_at'].count()/contacts['ts_accepted_at'].count()
+
+#Timeframe of when guests or accepted vs rejected
+
+contacts['month_checkin'] = contacts['ds_checkin'].dt.month #Extract month from checkin date
+contacts_checkin = contacts[contacts['month_checkin'] > 9] #Use only peak season months (Oct, Nov, Dec)
+
+#Distribution of checkin among October, November, and December and split by acceptance
+sns.displot(contacts_checkin, x='month_checkin', hue = 'accepted', multiple="dodge", binwidth=0.3)
+plt.xticks([10, 11, 12])
+plt.show()
+
+#Merge datasets for more analysis
+merged_datasets = contacts.merge(searches, left_on='id_guest', right_on='id_user')
+
+#Check difference between prices searched between accepted/rejected applicants
+merged_pricemax_filter = merged_datasets.loc[(merged_datasets['filter_price_max'] <= 600)]
+sns.displot(merged_pricemax_filter, x="filter_price_max", hue="accepted", multiple="dodge")
+plt.show()
+
+#Classify dataset based on filter_price_max
+
+def label_price (row):
+    if (row['filter_price_max'] >= 0) & (row['filter_price_max'] < 100):
+        return '0-100'
+    
+    elif (row['filter_price_max'] >= 100) & (row['filter_price_max'] < 200):
+        return '100-200'
+
+    elif (row['filter_price_max'] >= 200) & (row['filter_price_max'] < 300):
+        return '200-300'
+    
+    elif (row['filter_price_max'] >= 300) & (row['filter_price_max'] < 400):
+        return '300-400'
+
+    elif (row['filter_price_max'] >= 400) & (row['filter_price_max'] < 500):
+        return '400-500'
+    
+    elif (row['filter_price_max'] >= 500) & (row['filter_price_max'] < 600):
+        return '500-600'
+    
+    else:
+        return '600+'
+
+merged_datasets['classification_max_price'] = merged_datasets.apply(lambda row: label_price(row), axis=1)
+
+merged_datasets.groupby('classification_max_price').agg({'accepted': 'mean'})
+
+#Find the acceptance rate by country
+
+dataset_country = merged_datasets[['origin_country', 'accepted']]
+
+#Find acceptance count by country and accepted
+accepted_count = dataset_country.groupby(['origin_country', 'accepted']).agg({'origin_country':'count'})
+accepted_count.columns = ['count_accepted']
+
+#Find acceptance count by country
+country_count = dataset_country.groupby(['origin_country']).agg({'origin_country':'count'})
+country_count.columns = ['count_country']
+
+#Merge datasets for easier manipulation 
+acceptance_country = pd.merge(dataset_country, accepted_count,  how='left', on=['origin_country','accepted']) #Merge accepted count
+acceptance_country = acceptance_country.drop_duplicates()
+
+acceptance_country = pd.merge(acceptance_country, country_count, how='left', on=['origin_country']) #Merge total country count
+acceptance_country = acceptance_country.sort_values(['count_country', 'accepted'], ascending = [False, True])
+acceptance_country = acceptance_country[acceptance_country['count_country'] >= 100] #100 is used so there is a good amount of data to make assumptions
+acceptance_country = acceptance_country[acceptance_country['accepted'] == True]
+
+#Divide count_accepted column by count_country column to find acceptance rate by country
+acceptance_country['acceptance_rate'] = acceptance_country['count_accepted']/acceptance_country['count_country']
+acceptance_country.sort_values(['acceptance_rate'], ascending = True)
